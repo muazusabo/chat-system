@@ -1,6 +1,29 @@
+export type Role = 'USER' | 'ADMIN';
+export type UserStatus = 'ONLINE' | 'OFFLINE' | 'AWAY';
 export type ConversationType = 'PRIVATE' | 'GROUP';
 export type MemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
 export type MessageType = 'TEXT' | 'IMAGE';
+
+export interface SafeUser {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  isVerified: boolean;
+  status: UserStatus;
+  profileImage: string | null;
+  createdAt: string;
+}
+
+export interface LoginResponse {
+  accessToken: string;
+  user: SafeUser;
+}
+
+export interface RegisterResponse {
+  id: string;
+  email: string;
+}
 
 export interface ConversationMember {
   id: string;

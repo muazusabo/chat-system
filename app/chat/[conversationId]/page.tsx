@@ -8,9 +8,11 @@ import { useMessages, useSendMessage, useTypingIndicator } from '@/lib/hooks/use
 import { useSocket } from '@/lib/hooks/useSocket';
 import { useAuthStore } from '@/lib/auth-store';
 import { resolveAvatarUrl } from '@/lib/avatar';
+import { getConversationWallpaper, resolveWallpaperStyle } from '@/lib/wallpaper';
 import { MessageBubble } from '@/app/chat/MessageBubble';
 import { TypingIndicator } from '@/app/chat/TypingIndicator';
 import { MessageInput } from '@/app/chat/MessageInput';
+import { WallpaperPicker } from '@/app/chat/WallpaperPicker';
 import { Spinner } from '@/components/ui/Spinner';
 import type { Message } from '@/lib/types';
 
@@ -51,6 +53,8 @@ export default function ConversationPage({
   const { startTyping, stopTyping } = useTypingIndicator(conversationId);
 
   const [typingUser, setTypingUser] = useState<string | null>(null);
+  const [wallpaperPickerOpen, setWallpaperPickerOpen] = useState(false);
+  const [wallpaperRefresh, setWallpaperRefresh] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isFirstLoad = useRef(true);
@@ -136,43 +140,59 @@ export default function ConversationPage({
     conversation?.type === 'GROUP' ? conversation.image : otherMember?.user.profileImage
   );
 
+  const wallpaperSetting = getConversationWallpaper(conversationId);
+  const wallpaperStyle = resolveWallpaperStyle(wallpaperSetting, resolveAvatarUrl);
+
   return (
-    <div className="flex h-full flex-col bg-[var(--neu-chat-bg)]" style={{ fontFamily: 'Poppins, sans-serif' }}>
+    <div className="flex h-full flex-col" style={{ fontFamily: 'Poppins, sans-serif', ...wallpaperStyle }}>
       {/* Header */}
-      <div className={`flex items-center bg-[var(--neu-bg)] px-2 py-2 ${raised}`}>
+      <div className={`flex items-center justify-between bg-[var(--neu-bg)] px-2 py-2 ${raised}`}>
+        <div className="flex items-center">
+          <button
+            onClick={() => router.push('/chat')}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[var(--neu-text-secondary)] hover:bg-black/5 md:hidden"
+            title="Back"
+          >
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+              <path d="M15 18l-6-6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <button
+            onClick={() => {
+              if (conversation?.type === 'GROUP') router.push(`/groups/${conversationId}`);
+              else if (otherMember) router.push(`/users/${otherMember.userId}`);
+            }}
+            disabled={!otherMember && conversation?.type !== 'GROUP'}
+            className="flex flex-1 items-center gap-3 rounded-xl px-2 py-1.5 text-left hover:bg-black/5 disabled:cursor-default disabled:hover:bg-transparent"
+          >
+            <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-[var(--neu-card-alt)] text-sm font-bold text-[var(--neu-text-secondary)]">
+              {headerImage ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={headerImage} alt={headerName ?? ''} className="h-full w-full object-cover" />
+              ) : (
+                headerName?.charAt(0).toUpperCase()
+              )}
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-[var(--neu-text-primary)]">{headerName}</p>
+              {otherMember && (
+                <p className="text-xs text-[var(--neu-text-secondary)]">
+                  {otherMember.user.status === 'ONLINE' ? 'Online' : 'Offline'}
+                </p>
+              )}
+            </div>
+          </button>
+        </div>
         <button
-          onClick={() => router.push('/chat')}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[var(--neu-text-secondary)] hover:bg-black/5 md:hidden"
-          title="Back"
+          onClick={() => setWallpaperPickerOpen(true)}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[var(--neu-text-secondary)] hover:bg-black/5"
+          title="Chat wallpaper"
         >
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
-            <path d="M15 18l-6-6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <circle cx="8.5" cy="8.5" r="1.5" stroke="currentColor" strokeWidth="2" />
+            <path d="M21 15l-5-5L5 21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-        </button>
-        <button
-          onClick={() => {
-            if (conversation?.type === 'GROUP') router.push(`/groups/${conversationId}`);
-            else if (otherMember) router.push(`/users/${otherMember.userId}`);
-          }}
-          disabled={!otherMember && conversation?.type !== 'GROUP'}
-          className="flex flex-1 items-center gap-3 rounded-xl px-2 py-1.5 text-left hover:bg-black/5 disabled:cursor-default disabled:hover:bg-transparent"
-        >
-          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-[var(--neu-card-alt)] text-sm font-bold text-[var(--neu-text-secondary)]">
-            {headerImage ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={headerImage} alt={headerName ?? ''} className="h-full w-full object-cover" />
-            ) : (
-              headerName?.charAt(0).toUpperCase()
-            )}
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-[var(--neu-text-primary)]">{headerName}</p>
-            {otherMember && (
-              <p className="text-xs text-[var(--neu-text-secondary)]">
-                {otherMember.user.status === 'ONLINE' ? 'Online' : 'Offline'}
-              </p>
-            )}
-          </div>
         </button>
       </div>
 
@@ -229,6 +249,14 @@ export default function ConversationPage({
         onTypingStart={startTyping}
         onTypingStop={stopTyping}
       />
+
+      {wallpaperPickerOpen && (
+        <WallpaperPicker
+          conversationId={conversationId}
+          onClose={() => setWallpaperPickerOpen(false)}
+          onChange={() => setWallpaperRefresh((n) => n + 1)}
+        />
+      )}
     </div>
   );
 }

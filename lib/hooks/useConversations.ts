@@ -7,6 +7,8 @@ export function useConversations() {
   return useQuery({
     queryKey: ['conversations'],
     queryFn: () => api.get<Conversation[]>('/conversations'),
+    staleTime: 30 * 1000, // Data is fresh for 30 seconds
+    refetchInterval: 60 * 1000, // Refetch every 60 seconds to stay in sync
   });
 }
 
@@ -15,6 +17,8 @@ export function useConversation(id: string | undefined) {
     queryKey: ['conversations', id],
     queryFn: () => api.get<Conversation>(`/conversations/${id}`),
     enabled: !!id,
+    staleTime: 30 * 1000, // Data is fresh for 30 seconds
+    refetchInterval: 60 * 1000, // Refetch every 60 seconds to stay in sync
   });
 }
 

@@ -21,6 +21,7 @@ export function useMessages(conversationId: string | undefined) {
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: !!conversationId,
+    staleTime: 10 * 1000, // Keep messages fresh for 10 seconds
   });
 
   // Live updates via socket — keep the cache in sync without refetching.

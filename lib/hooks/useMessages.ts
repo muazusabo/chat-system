@@ -88,8 +88,8 @@ export function useMessages(conversationId: string | undefined) {
 
 export function useSendMessage() {
   const socket = useSocket();
-  return (conversationId: string, content: string, type: MessageType = 'TEXT') => {
-    socket?.emit('sendMessage', { conversationId, content, type });
+  return (conversationId: string, content: string, type: MessageType = 'TEXT', duration?: number) => {
+    socket?.emit('sendMessage', { conversationId, content, type, duration });
   };
 }
 
@@ -126,6 +126,33 @@ export function useUploadMessageImage() {
         throw new Error(body.message ?? 'Upload failed');
       }
       return body.data as { url: string };
+    },
+  });
+}
+
+export function useUploadMessageAudio() {
+  return useMutation({
+    mutationFn: async ({ blob, duration }: { blob: Blob; duration: number }) => {
+      const formData = new FormData();
+      // Filename/extension is cosmetic here — the backend's fileFilter goes
+      // by MIME type, not this name — but multer requires *a* filename.
+      formData.append('audio', blob, 'voice-note.webm');
+      formData.append('duration', String(Math.round(duration)));
+
+      const res = await fetch(`${API_URL}/messages/upload-audio`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${getAccessToken()}`,
+        },
+        credentials: 'include',
+        body: formData,
+      });
+
+      const body = await res.json();
+      if (!res.ok || !body.success) {
+        throw new Error(body.message ?? 'Upload failed');
+      }
+      return body.data as { url: string; duration: number | null };
     },
   });
 }

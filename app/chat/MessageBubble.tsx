@@ -3,10 +3,29 @@
 
 import { useState } from 'react';
 import { resolveAvatarUrl } from '@/lib/avatar';
+import { AudioMessageBubble } from './AudioMessageBubble';
 import type { Message } from '@/lib/types';
+
+// Authentic WhatsApp bubble colors.
+const WA_OWN_BUBBLE = 'var(--wa-own-bubble)';
+const WA_TEXT = 'var(--wa-text)';
+const WA_TICK_GRAY = 'var(--wa-tick)';
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// Static double-check "sent" indicator — gray ticks, matching WhatsApp's
+// unread state. There's no read-receipt data in the Message model yet, so
+// this always shows "sent," never the blue "read" ticks — that would need
+// a real read-receipt field to be honest rather than decorative.
+function SentTicks() {
+  return (
+    <svg width="15" height="11" viewBox="0 0 16 11" fill="none" className="inline-block align-text-bottom">
+      <path d="M1 5.5L4.5 9L11 1.5" stroke={WA_TICK_GRAY} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5.5 5.5L9 9L15.5 1.5" stroke={WA_TICK_GRAY} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 export function MessageBubble({
@@ -39,7 +58,7 @@ export function MessageBubble({
         {!isOwn && (
           <div className="h-6 w-6 shrink-0">
             {showAvatar && (
-              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--neu-card-alt)] text-[10px] font-bold text-[var(--neu-text-secondary)]">
+              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--wa-avatar-bg)] text-[10px] font-bold text-[var(--wa-avatar-text)]">
                 {message.sender?.name?.charAt(0).toUpperCase()}
               </div>
             )}
@@ -48,7 +67,7 @@ export function MessageBubble({
 
         <div className="relative">
           {editing ? (
-            <div className="flex items-center gap-1.5 rounded-2xl bg-[var(--neu-bg)] px-3 py-2 shadow-sm">
+            <div className="flex items-center gap-1.5 rounded-lg bg-[var(--wa-input-pill)] px-3 py-2 shadow-sm">
               <input
                 autoFocus
                 value={draft}
@@ -57,36 +76,35 @@ export function MessageBubble({
                   if (e.key === 'Enter') submitEdit();
                   if (e.key === 'Escape') setEditing(false);
                 }}
-                className="bg-transparent text-sm text-[var(--neu-text-primary)] outline-none"
+                className="bg-transparent text-sm outline-none"
+                style={{ color: WA_TEXT }}
               />
-              <button onClick={submitEdit} className="text-xs font-semibold text-emerald-600 hover:text-emerald-700">
+              <button onClick={submitEdit} className="text-xs font-semibold hover:opacity-80" style={{ color: 'var(--wa-accent)' }}>
                 Save
               </button>
             </div>
           ) : (
             <div
-              className={`rounded-2xl px-3.5 py-2 text-sm leading-relaxed shadow-sm ${
-                isOwn
-                  ? 'rounded-br-md bg-emerald-500 text-white'
-                  : 'rounded-bl-md bg-[var(--neu-bg)] text-[var(--neu-text-primary)]'
+              className={`rounded-lg px-2.5 py-1.5 text-sm leading-relaxed shadow-sm ${
+                isOwn ? 'rounded-tr-none' : 'rounded-tl-none'
               }`}
+              style={{ backgroundColor: isOwn ? WA_OWN_BUBBLE : 'var(--wa-other-bubble)', color: WA_TEXT }}
             >
               {message.type === 'IMAGE' ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={resolveAvatarUrl(message.content) ?? message.content}
                   alt="Sent image"
-                  className="max-h-72 max-w-full rounded-lg object-cover"
+                  className="max-h-72 max-w-full rounded-md object-cover"
                 />
+              ) : message.type === 'AUDIO' ? (
+                <AudioMessageBubble url={message.content} duration={message.duration} />
               ) : (
-                <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                <p className="whitespace-pre-wrap break-words px-0.5">{message.content}</p>
               )}
-              <span
-                className={`float-right ml-2 mt-1 text-[10px] ${
-                  isOwn ? 'text-emerald-50/80' : 'text-[var(--neu-text-tertiary)]'
-                }`}
-              >
+              <span className="float-right ml-2 mt-1 flex items-center gap-1 text-[11px]" style={{ color: 'var(--wa-text-secondary)' }}>
                 {formatTime(message.createdAt)}
+                {isOwn && <SentTicks />}
               </span>
             </div>
           )}
@@ -95,7 +113,8 @@ export function MessageBubble({
             <div className="absolute -left-7 top-1/2 hidden -translate-y-1/2 group-hover:block">
               <button
                 onClick={() => setMenuOpen((v) => !v)}
-                className="rounded-full p-1 text-[var(--neu-text-secondary)] hover:bg-black/5"
+                className="rounded-full p-1 hover:bg-[var(--wa-menu-hover)]"
+                style={{ color: 'var(--wa-text-secondary)' }}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                   <circle cx="12" cy="5" r="1.5" />
@@ -104,13 +123,14 @@ export function MessageBubble({
                 </svg>
               </button>
               {menuOpen && (
-                <div className="absolute left-0 top-6 z-10 w-28 rounded-lg bg-[var(--neu-bg)] py-1 shadow-lg">
+                <div className="absolute left-0 top-6 z-10 w-28 rounded-lg bg-[var(--wa-menu-bg)] py-1 shadow-lg">
                   <button
                     onClick={() => {
                       setEditing(true);
                       setMenuOpen(false);
                     }}
-                    className="block w-full px-3 py-1.5 text-left text-xs text-[var(--neu-text-primary)] hover:bg-black/5"
+                    className="block w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--wa-menu-hover)]"
+                    style={{ color: WA_TEXT }}
                   >
                     Edit
                   </button>
@@ -119,7 +139,7 @@ export function MessageBubble({
                       onDelete(message.id);
                       setMenuOpen(false);
                     }}
-                    className="block w-full px-3 py-1.5 text-left text-xs text-red-500 hover:bg-black/5"
+                    className="block w-full px-3 py-1.5 text-left text-xs text-red-500 hover:bg-[var(--wa-menu-hover)]"
                   >
                     Delete
                   </button>

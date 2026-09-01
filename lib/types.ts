@@ -2,7 +2,7 @@ export type Role = 'USER' | 'ADMIN';
 export type UserStatus = 'ONLINE' | 'OFFLINE' | 'AWAY';
 export type ConversationType = 'PRIVATE' | 'GROUP';
 export type MemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
-export type MessageType = 'TEXT' | 'IMAGE';
+export type MessageType = 'TEXT' | 'IMAGE' | 'AUDIO';
 
 export interface SafeUser {
   id: string;
@@ -41,6 +41,7 @@ export interface Message {
   senderId: string;
   content: string;
   type: MessageType;
+  duration: number | null; // seconds — only meaningful for AUDIO messages
   createdAt: string;
   updatedAt: string;
   sender?: SafeUser;

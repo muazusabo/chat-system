@@ -7,6 +7,7 @@ import { AuthProvider } from '@/components/providers/AuthProvider';
 import { SocketProvider } from '@/components/providers/SocketProvider';
 import { ThemeProvider } from '@/lib/hooks/useTheme';
 import { ToastContainer } from '@/components/ui/Toast';
+import { CallProvider } from '@/components/calls/callprovider';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => new QueryClient());
@@ -16,8 +17,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <ThemeProvider>
         <AuthProvider>
           <SocketProvider>
-            {children}
-            <ToastContainer />
+            <CallProvider>
+              {children}
+              <ToastContainer />
+            </CallProvider>
           </SocketProvider>
         </AuthProvider>
       </ThemeProvider>

@@ -16,8 +16,8 @@ interface CallContextValue {
   status: CallStatus;
   remoteUserId: string | null;
   incomingCall: IncomingCallInfo | null;
-  startCall: (conversationId: string, toUserId: string) => void;
-  answerCall: () => void;
+  startCall: (conversationId: string, toUserId: string) => Promise<void>;
+  answerCall: () => Promise<void>;
   rejectCall: () => void;
   endCall: () => void;
   isMuted: boolean;
@@ -45,6 +45,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const [isMuted, setIsMuted] = useState(false);
   const [callDurationSeconds, setCallDurationSeconds] = useState(0);
 
+  // Mirrors `status` for use inside socket callbacks, which otherwise close
+  // over a stale value from when the listener was registered.
   const statusRef = useRef<CallStatus>('idle');
   useEffect(() => {
     statusRef.current = status;
@@ -56,19 +58,45 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const durationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const stopDurationTimer = useCallback(() => {
+    if (durationTimerRef.current) {
+      clearInterval(durationTimerRef.current);
+      durationTimerRef.current = null;
+    }
+  }, []);
+
   const cleanup = useCallback(() => {
+    stopDurationTimer();
+
     pcRef.current?.close();
     pcRef.current = null;
+
     localStreamRef.current?.getTracks().forEach((t) => t.stop());
     localStreamRef.current = null;
+
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.pause();
+      remoteAudioRef.current.srcObject = null;
+    }
+
     pendingCandidatesRef.current = [];
-    if (durationTimerRef.current) clearInterval(durationTimerRef.current);
-    durationTimerRef.current = null;
     setCallDurationSeconds(0);
     setStatus('idle');
     setRemoteUserId(null);
     setIncomingCall(null);
     setIsMuted(false);
+  }, [stopDurationTimer]);
+
+  const flushPendingCandidates = useCallback(async (pc: RTCPeerConnection) => {
+    const queued = pendingCandidatesRef.current;
+    pendingCandidatesRef.current = [];
+    for (const candidate of queued) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.error('[Call] failed to add queued ICE candidate:', error);
+      }
+    }
   }, []);
 
   const createPeerConnection = useCallback(
@@ -107,6 +135,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   const startCall = useCallback(
     async (conversationId: string, toUserId: string) => {
+      if (statusRef.current !== 'idle') return;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         localStreamRef.current = stream;
@@ -120,7 +149,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         setRemoteUserId(toUserId);
         setStatus('outgoing');
         socket?.emit('call:invite', { conversationId, toUserId, offer });
-      } catch {
+      } catch (error) {
+        console.error('[Call] failed to start call:', error);
         cleanup();
       }
     },
@@ -137,22 +167,21 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
-      for (const candidate of pendingCandidatesRef.current) {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      }
-      pendingCandidatesRef.current = [];
+      await flushPendingCandidates(pc);
 
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
       const toUserId = incomingCall.fromUserId;
-      setRemoteUserId(toUserId);
       setIncomingCall(null);
       socket?.emit('call:answer', { toUserId, answer });
-    } catch {
+      // status flips to 'connected' via onconnectionstatechange once ICE
+      // negotiation completes; remoteUserId was already set on 'incoming'.
+    } catch (error) {
+      console.error('[Call] failed to answer call:', error);
       cleanup();
     }
-  }, [incomingCall, createPeerConnection, socket, cleanup]);
+  }, [incomingCall, createPeerConnection, flushPendingCandidates, socket, cleanup]);
 
   const rejectCall = useCallback(() => {
     if (incomingCall) {
@@ -163,6 +192,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   const endCall = useCallback(() => {
     if (remoteUserId) {
+      // Backend only has a call:end handler right now (no call:cancel), so
+      // an unanswered outgoing call ending also just sends call:end. The
+      // callee's UI will still clear correctly on the existing handler.
       socket?.emit('call:end', { toUserId: remoteUserId });
     }
     cleanup();
@@ -171,34 +203,40 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const toggleMute = useCallback(() => {
     const stream = localStreamRef.current;
     if (!stream) return;
-    stream.getAudioTracks().forEach((t) => (t.enabled = !t.enabled));
-    setIsMuted((m) => !m);
-  }, []);
+    const nextMuted = !isMuted;
+    stream.getAudioTracks().forEach((t) => (t.enabled = !nextMuted));
+    setIsMuted(nextMuted);
+  }, [isMuted]);
 
   useEffect(() => {
     if (!socket) return;
 
     function handleIncoming(data: IncomingCallInfo) {
-      // No "busy" signal sent back yet — an already-in-a-call user just
-      // silently doesn't see the new incoming call ring. Worth adding a
-      // call:busy event if this becomes a real gap in practice.
+      // No call:busy handler on the backend yet — an already-in-a-call user
+      // just silently doesn't ring for the new incoming call. The caller
+      // will sit on "Calling..." with no explanation; worth adding
+      // call:busy on the gateway if that gap matters in practice.
       if (statusRef.current !== 'idle') return;
       setIncomingCall(data);
+      setRemoteUserId(data.fromUserId);
       setStatus('incoming');
     }
 
     function handleAnswered(data: { fromUserId: string; answer: RTCSessionDescriptionInit }) {
-      pcRef.current?.setRemoteDescription(new RTCSessionDescription(data.answer)).then(async () => {
-        for (const candidate of pendingCandidatesRef.current) {
-          await pcRef.current?.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-        pendingCandidatesRef.current = [];
-      });
+      const pc = pcRef.current;
+      if (!pc) return;
+      pc.setRemoteDescription(new RTCSessionDescription(data.answer))
+        .then(() => flushPendingCandidates(pc))
+        .catch((error) => {
+          console.error('[Call] failed to apply remote answer:', error);
+          cleanup();
+        });
     }
 
     function handleIceCandidate(data: { candidate: RTCIceCandidateInit }) {
-      if (pcRef.current?.remoteDescription) {
-        pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+      const pc = pcRef.current;
+      if (pc?.remoteDescription) {
+        pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
       } else {
         pendingCandidatesRef.current.push(data.candidate);
       }
@@ -225,7 +263,16 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       socket.off('call:rejected', handleRejected);
       socket.off('call:ended', handleEnded);
     };
-  }, [socket, cleanup]);
+  }, [socket, cleanup, flushPendingCandidates]);
+
+  // Full teardown if the provider itself unmounts mid-call.
+  useEffect(() => {
+    return () => {
+      stopDurationTimer();
+      pcRef.current?.close();
+      localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, [stopDurationTimer]);
 
   return (
     <CallContext.Provider
@@ -243,7 +290,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       }}
     >
       {children}
-      <audio ref={remoteAudioRef} autoPlay />
+      <audio ref={remoteAudioRef} autoPlay playsInline aria-hidden="true" />
     </CallContext.Provider>
   );
 }

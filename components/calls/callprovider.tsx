@@ -27,14 +27,18 @@ interface CallContextValue {
 
 const CallContext = createContext<CallContextValue | null>(null);
 
-// STUN only — no TURN server configured. Calls between two peers who are
-// both on straightforward home/office NATs will connect fine. Calls where
-// either side is behind a symmetric NAT (common on cellular networks, some
-// corporate/campus WiFi) will fail to establish audio. Fixing that requires
-// a TURN server (e.g. Twilio's Network Traversal Service, or self-hosted
-// coturn) added to this array — that's infrastructure you'd need to stand
-// up and pay for/host, not something addable from just the app code.
-const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  ...(process.env.NEXT_PUBLIC_TURN_URL
+    ? [
+        {
+          urls: process.env.NEXT_PUBLIC_TURN_URL,
+          username: process.env.NEXT_PUBLIC_TURN_USERNAME,
+          credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL,
+        },
+      ]
+    : []),
+];
 
 export function CallProvider({ children }: { children: React.ReactNode }) {
   const socket = useSocket();
@@ -99,6 +103,26 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const waitForSocket = useCallback(async () => {
+    if (!socket) throw new Error('Call signaling is unavailable');
+    if (socket.connected) return;
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        socket.off('connect', handleConnect);
+        reject(new Error('Call signaling is not connected'));
+      }, 10000);
+
+      const handleConnect = () => {
+        clearTimeout(timeout);
+        socket.off('connect', handleConnect);
+        resolve();
+      };
+
+      socket.once('connect', handleConnect);
+    });
+  }, [socket]);
+
   const createPeerConnection = useCallback(
     (toUserId: string) => {
       const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
@@ -109,20 +133,28 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         }
       };
 
+      pc.onicecandidateerror = (e) => {
+        console.warn('[Call] ICE candidate error:', e.errorCode, e.errorText);
+      };
+
       pc.ontrack = (e) => {
         if (remoteAudioRef.current) {
           remoteAudioRef.current.srcObject = e.streams[0];
+          remoteAudioRef.current.play().catch((error) => {
+            console.warn('[Call] remote audio playback requires user interaction:', error);
+          });
         }
       };
 
       pc.onconnectionstatechange = () => {
+        if (pcRef.current !== pc) return;
         if (pc.connectionState === 'connected') {
           setStatus('connected');
           if (!durationTimerRef.current) {
             durationTimerRef.current = setInterval(() => setCallDurationSeconds((s) => s + 1), 1000);
           }
         }
-        if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+        if (['failed', 'closed'].includes(pc.connectionState)) {
           cleanup();
         }
       };
@@ -137,6 +169,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     async (conversationId: string, toUserId: string) => {
       if (statusRef.current !== 'idle') return;
       try {
+        const signalingSocket = socket;
+        if (!signalingSocket) throw new Error('Call signaling is unavailable');
+        await waitForSocket();
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         localStreamRef.current = stream;
 
@@ -148,13 +183,17 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
         setRemoteUserId(toUserId);
         setStatus('outgoing');
-        socket?.emit('call:invite', { conversationId, toUserId, offer });
+        signalingSocket.emit('call:invite', {
+          conversationId,
+          toUserId,
+          offer: pc.localDescription ?? offer,
+        });
       } catch (error) {
         console.error('[Call] failed to start call:', error);
         cleanup();
       }
     },
-    [createPeerConnection, socket, cleanup]
+    [createPeerConnection, socket, cleanup, waitForSocket]
   );
 
   const answerCall = useCallback(async () => {
@@ -236,7 +275,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     function handleIceCandidate(data: { candidate: RTCIceCandidateInit }) {
       const pc = pcRef.current;
       if (pc?.remoteDescription) {
-        pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+        pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch((error) => {
+          console.warn('[Call] failed to add ICE candidate:', error);
+        });
       } else {
         pendingCandidatesRef.current.push(data.candidate);
       }
